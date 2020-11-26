@@ -1,0 +1,188 @@
+---
+title: "Machine Learning Models to Predict Estrogen Receptor Status: A Breast Cancer Metabolomics Analysis"
+output: html_notebook
+---
+```{r}
+library(readxl)
+library(caret)
+library(skimr)
+#library(gplots)
+#library(hglm)
+```
+
+```{r}
+omics <- read_excel('metabolomics_data.xlsx')
+omics <- as.data.frame(omics)
+classifications <- omics[nrow(omics), 7:ncol(omics)]
+omics <- omics[-nrow(omics), -which(names(omics) %in% c('pubchem','retention_index','quant_mass', 'binbase', 'peaks'))]
+#skim(omics)
+```
+
+
+```{r}
+# preprocesed using K-Nearest neighbors to impute missing data
+any(is.na(omics))
+```
+
+```{r}
+# before quantile normalization
+groups <- factor(classifications[,-c(1, 2, 3, 4, 5, 6)])
+col <- rep(rainbow(2),times=table(groups))
+boxplot(x = omics[, -1],col=col,las=2,cex.axis=0.8)
+```
+
+```{r}
+quantile_normalization <- function(df){
+  df_rank <- apply(df, 2, rank, ties.method = 'min')
+  df_sorted <- data.frame(apply(df, 2, sort))
+  df_mean <- apply(df_sorted, 1, mean)
+  
+  index_to_mean <- function(my_index, my_mean){
+    return(my_mean[my_index])
+  }
+  df_final <- apply(df_rank, 2, index_to_mean, my_mean=df_mean)
+  rownames(df_final) <- rownames(df)
+  return(df_final)
+}
+
+normalized <- quantile_normalization(omics[, -1])
+df_t <- matrix(normalized, nrow = nrow(omics[, -1]))
+rownames(df_t) <- omics[[1]]
+colnames(df_t) <- colnames(omics[,-1])
+#BiocManager::install("preprocessCore")
+#library(preprocessCore)
+#normalize.quantiles(as.matrix(omics[-1, -1]))
+```
+
+```{r, fig.height = 9}
+# before quantile normalization
+groups <- factor(classifications[,-c(1, 2, 3, 4, 5, 6)])
+col <- rep(c('red','blue'),times=table(groups))
+
+par(mfrow=c(2,1))
+boxplot(x = omics[, -1],col=col,las=2,cex.axis=0.8)
+title("Original Data (Unnormalized)")
+boxplot(x = df_t,col=col,las=2,cex.axis=0.8)
+title("=Quantile Normalized Data")
+
+```
+
+```{r, echo = FALSE}
+cor <- cor(omics[, -1],method="pearson")
+cor2 <- cor(df_t ,method="pearson")
+
+par(mfrow=c(1,2))
+heatmap(cor)
+heatmap(cor2)
+
+legend(x="bottomright",legend=c("min", "ave", "max"))
+```
+
+```{r}
+df <- t(df_t)
+
+  # randomly order the dataset by shuffling by metabolite
+  df <- df[, sample(ncol(df))]
+  df <- cbind(df,"class" = t(classifications))
+  df <- as.data.frame(df)
+  colnames(df)[ncol(df)] <- 'class'
+  df$class <- as.factor(ifelse(df$class==1,1,0))
+
+
+  # split metabolomics samples into 80% training & 20% testing set
+  #split <- round(nrow(df) * 0.80)
+  #training <- df[1:split, ]
+  #testing <- df[(split + 1):nrow(df),]
+  inTrain <- createDataPartition(y = df$class, p = 0.8, list = FALSE)
+  training <- df[ inTrain,]
+  testing <- df[-inTrain,] 
+  
+  training$class <- as.factor(ifelse(training$class==1,1,0))
+  testing$class <- as.factor(ifelse(testing$class==1,1,0))
+  
+  levels(training$class) <- c("n", "y")
+  levels(testing$class) <- c("n", "y")
+  
+  # 10-fold cross-validation with caret package`
+  # It gives you multiple estimates of out-of-sample error, rather than single estimate.
+  # twoClassSummary computes sensitivity, specificity, area under ROC curve
+  set.seed(7)
+  fitControl <- trainControl(method = "cv", number = 10, summaryFunction = twoClassSummary, classProbs = TRUE, verboseIter = TRUE)
+```
+
+```{r}
+  # rpart
+  tree <- train(as.factor(class) ~ ., data = data.frame(training), method = 'rpart', trControl = fitControl, metric = "ROC")
+
+  tree_preds <- predict(tree, newdata = data.frame(training),type="prob")
+```
+
+```{r}
+library(rattle)
+fancyRpartPlot(tree$finalModel)
+
+tree$finalModel
+```
+```{r}
+  #LDA
+   lda <- train(class~., data=data.frame(training), method = 'lda', trControl=fitControl,metric="ROC") #loclda 
+   lda_preds_prob <- predict(lda, newdata = data.frame(testing),type="prob")
+   lda_preds <- predict(lda, newdata = data.frame(testing))
+   
+  #SVM training performance
+  auc_tr_lda <- max(lda$results$ROC)
+  sens_tr_lda <- lda$results$Sens[which.max(lda$results$ROC)]
+  spec_tr_lda <- lda$results$Spec[which.max(lda$results$ROC)]
+  #SVM testing performance
+  conf_lda <- confusionMatrix(lda_preds, testing$class)
+```
+
+```{r}
+   #SVM
+    svm <- train(class~., data=training, method="svmRadial", trControl=fitControl,metric="ROC") 
+  svm_preds_prob <- predict(svm, newdata = testing,type="prob")
+  svm_preds <- predict(svm, newdata = testing)
+    
+  #SVM training performance
+  auc_tr_svm <- max(svm$results$ROC)
+  sens_tr_svm <- svm$results$Sens[which.max(svm$results$ROC)]
+  spec_tr_svm <- svm$results$Spec[which.max(svm$results$ROC)]
+  #SVM testing performance
+  conf_svm <- confusionMatrix(svm_preds, testing$class)
+```
+
+```{r}
+#Random Forest
+#rf <- train(class~.,data=data.frame(training), method="rf", trControl=fitControl, metric="ROC") 
+rf_preds_prob <- predict(rf, newdata = data.frame(training),type="prob") 
+rf_preds <- predict(rf, newdata = data.frame(training)) 
+```
+
+```{r}
+#GBM
+#gbm <- train(class~., data=data.frame(training), method="gbm", trControl=fitControl,metric="ROC") 
+gbm_preds_prob <- predict(gbm, newdata = data.frame(testing),type="prob") 
+gbm_preds <- predict(gbm, newdata = data.frame(testing)) 
+```
+
+```{r}
+#PAM
+pam <- train(class~., data=data.frame(training), method="pam", trControl=fitControl,metric="ROC")#plr
+
+pam_preds_prob <- predict( pam, newdata = data.frame(testing),type="prob") 
+pam_preds <- predict( pam, newdata = data.frame(testing)) 
+
+```
+```{r}
+#DL
+
+```
+
+
+
+
+
+
+
+
+
