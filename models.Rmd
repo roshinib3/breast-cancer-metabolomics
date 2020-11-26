@@ -1,6 +1,8 @@
 ---
 title: "Machine Learning Models to Predict Estrogen Receptor Status: A Breast Cancer Metabolomics Analysis"
-output: html_notebook
+output: 
+  html_document:
+    keep_md: true
 ---
 ```{r}
 library(readxl)
