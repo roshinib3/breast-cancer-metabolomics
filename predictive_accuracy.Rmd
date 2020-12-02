@@ -1,0 +1,41 @@
+---
+title: "Comparative Study of Machine Learning Algorithms for Estrogen Receptor Status Prediction On Breast Cancer Metabolomics Data - Predictive Accuracy"
+author: "Roshini Balasubramanian"
+output: 
+  html_document:
+    keep_md: true
+---
+```{r load AUC}
+library(ggplot2)
+AUC <- read.csv('AUC.csv',row.names = 1)
+AUC_t <- as.data.frame(t(AUC))
+wilcox.test(AUC_t[['dl']], AUC_t[['lda']], data = AUC_t)
+```
+```{r}
+wilcox.test(AUC_t[['dl']], AUC_t[['cart']], data = AUC_t)
+```
+```{r}
+wilcox.test(AUC_t[['dl']], AUC_t[['gbm']], data = AUC_t)
+```
+
+
+```{r plot AUC}
+sd <- as.data.frame(matrix(ncol = 1, nrow = 6))
+row.names(sd)  <- row.names(AUC)
+for (i in 1:nrow(AUC)){
+  sd[i,1] <- sd(AUC[i,])
+}
+
+AUC <- cbind(AUC, "mean" = rowMeans(AUC))
+AUC <- cbind(AUC, "sd" = sd)
+
+AUC$model <- row.names(AUC) 
+positions <- row.names(AUC %>% arrange(desc(mean)))
+ggplot(data=AUC, aes(x = model, y=mean, fill = model)) +
+    scale_fill_brewer(palette="Dark2")+
+  theme_minimal()+
+  geom_col() + scale_x_discrete(limits = positions) +geom_errorbar(aes(ymin=mean-V1, ymax=mean+V1), width=.5) + labs(title="AUC",
+        x ="Model", y = "Mean")
+```
+
+

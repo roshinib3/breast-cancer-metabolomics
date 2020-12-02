@@ -1,13 +1,19 @@
 ---
-title: "Machine Learning Models to Predict Estrogen Receptor Status: A Breast Cancer Metabolomics Analysis"
+title: "Comparative Study of Machine Learning Algorithms for Estrogen Receptor Status Prediction On Breast Cancer Metabolomics Data - Models"
+author: "Roshini Balasubramanian"
 output: 
   html_document:
     keep_md: true
 ---
 ```{r}
 library(readxl)
-library(caret)
 library(skimr)
+library(caret)
+library(pROC)
+library(pamr)
+library(gbm)
+library(h2o)
+library(dplyr)
 #library(gplots)
 #library(hglm)
 ```
@@ -28,45 +34,47 @@ any(is.na(omics))
 
 ```{r}
 # before quantile normalization
-groups <- factor(classifications[,-c(1, 2, 3, 4, 5, 6)])
+groups <- factor(classifications)
 col <- rep(rainbow(2),times=table(groups))
 boxplot(x = omics[, -1],col=col,las=2,cex.axis=0.8)
 ```
 
 ```{r}
-quantile_normalization <- function(df){
-  df_rank <- apply(df, 2, rank, ties.method = 'min')
-  df_sorted <- data.frame(apply(df, 2, sort))
-  df_mean <- apply(df_sorted, 1, mean)
+quant_norm <- function(data){
+  data_rank <- apply(data, 2, rank, ties.method = 'min')
+  data_sorted <- data.frame(apply(data, 2, sort))
+  data_mean <- apply(data_sorted, 1, mean)
   
   index_to_mean <- function(my_index, my_mean){
     return(my_mean[my_index])
   }
-  df_final <- apply(df_rank, 2, index_to_mean, my_mean=df_mean)
-  rownames(df_final) <- rownames(df)
-  return(df_final)
+  data_final <- apply(data_rank, 2, index_to_mean, my_mean=data_mean)
+  rownames(data_final) <- rownames(data)
+  return(data_final)
 }
 
-normalized <- quantile_normalization(omics[, -1])
-df_t <- matrix(normalized, nrow = nrow(omics[, -1]))
+normalized <- quant_norm(omics[, -1])
+df_t <- normalized
 rownames(df_t) <- omics[[1]]
 colnames(df_t) <- colnames(omics[,-1])
 #BiocManager::install("preprocessCore")
 #library(preprocessCore)
-#normalize.quantiles(as.matrix(omics[-1, -1]))
+
+normalized_omics <- df_t
+normalized_omics <- rbind(normalized_omics,"class" = classifications)
+write.csv(normalized_omics, 'metabolomics_normalized.csv')
 ```
 
 ```{r, fig.height = 9}
 # before quantile normalization
-groups <- factor(classifications[,-c(1, 2, 3, 4, 5, 6)])
+groups <- factor(classifications)
 col <- rep(c('red','blue'),times=table(groups))
 
 par(mfrow=c(2,1))
 boxplot(x = omics[, -1],col=col,las=2,cex.axis=0.8)
 title("Original Data (Unnormalized)")
 boxplot(x = df_t,col=col,las=2,cex.axis=0.8)
-title("=Quantile Normalized Data")
-
+title("Quantile Normalized Data")
 ```
 
 ```{r, echo = FALSE}
@@ -105,82 +113,226 @@ df <- t(df_t)
   levels(training$class) <- c("n", "y")
   levels(testing$class) <- c("n", "y")
   
+  x <- setdiff(names(training), "class")
+  y <- "class"
+  
+  
   # 10-fold cross-validation with caret package`
   # It gives you multiple estimates of out-of-sample error, rather than single estimate.
   # twoClassSummary computes sensitivity, specificity, area under ROC curve
   set.seed(7)
   fitControl <- trainControl(method = "cv", number = 10, summaryFunction = twoClassSummary, classProbs = TRUE, verboseIter = TRUE)
+  metric <- "ROC"
 ```
 
 ```{r}
-  # rpart
-  tree <- train(as.factor(class) ~ ., data = data.frame(training), method = 'rpart', trControl = fitControl, metric = "ROC")
+rf_model <- function(){
+  #Random Forest
+  rf <- train(class~.,data=data.frame(training), method="rf", trControl=fitControl, metric="ROC") 
+  rf_preds_prob <- predict(rf, newdata =data.frame(testing),type="prob")
+  rf_preds <- predict(rf, newdata = data.frame(testing)) 
 
-  tree_preds <- predict(tree, newdata = data.frame(training),type="prob")
+  #RF Training Performance
+  rf_index <- which.max(rf$results$ROC)
+  roc_rf <- rf$results$ROC[rf_index]
+  sens_rf <- rf$results$Sens[rf_index]
+  spec_rf <- rf$results$Spec[rf_index]
+  #RF Testing Performance
+  conf_rf <- confusionMatrix(rf_preds, testing$class)
+  pROC_rf <- roc(response = testing$class, predictor = rf_preds_prob$y)
+  auc_rf <- pROC_rf$auc
+  
+ return(auc_rf)
+
+}
+
+```
+  
+```{r}
+svm_model <- function(){
+   #SVM
+  svm <- train(class~., data=training, method="svmRadial", trControl=fitControl,metric=metric) 
+  svm_preds_prob <- predict(svm, newdata = testing,type="prob")
+  svm_preds <- predict(svm, newdata = testing)
+    
+  #SVM training performance
+  roc_svm <- max(svm$results$ROC)
+  sens_svm <- svm$results$Sens[which.max(svm$results$ROC)]
+  spec_svm <- svm$results$Spec[which.max(svm$results$ROC)]
+  #SVM testing performance
+  conf_svm <- confusionMatrix(svm_preds, testing$class)
+  pROC_svm <- roc(response = testing$class, predictor = svm_preds_prob$y)
+  auc_svm <- pROC_svm$auc
+  
+  return(auc_svm)
+}
+```
+
+```{r}
+cart_model<- function(){
+  # RPART
+  tree <- train(as.factor(class) ~ ., data = data.frame(training), method = 'rpart', trControl = fitControl, metric = metric)
+  tree_preds_prob <- predict(tree, newdata = data.frame(testing) %>% select(-class),type="prob")
+  tree_preds <- predict(tree, newdata = data.frame(testing) %>% select(-class))
+  
+  # rpart training performance
+  tree_index <- which.max(tree$results$ROC)
+  roc_tree <- tree$results$ROC[tree_index]
+  sens_tree <- tree$results$Sens[tree_index]
+  spec_tree <- tree$results$Spec[tree_index]
+  # rpart testing performance
+  conf_tree <- confusionMatrix(tree_preds, testing$class)
+  pROC_tree <- roc(response = testing$class, predictor = tree_preds_prob$y)
+  auc_tree <- pROC_tree$auc
+  
+  return(auc_tree)
+}
 ```
 
 ```{r}
 library(rattle)
 fancyRpartPlot(tree$finalModel)
-
 tree$finalModel
 ```
+
 ```{r}
+lda_model<-function(){
   #LDA
-   lda <- train(class~., data=data.frame(training), method = 'lda', trControl=fitControl,metric="ROC") #loclda 
+   lda <- train(class~., data=data.frame(training), method = 'lda', trControl=fitControl,metric=metric)
    lda_preds_prob <- predict(lda, newdata = data.frame(testing),type="prob")
    lda_preds <- predict(lda, newdata = data.frame(testing))
    
-  #SVM training performance
-  auc_tr_lda <- max(lda$results$ROC)
-  sens_tr_lda <- lda$results$Sens[which.max(lda$results$ROC)]
-  spec_tr_lda <- lda$results$Spec[which.max(lda$results$ROC)]
-  #SVM testing performance
+  #LDA training performance
+  lda_index <- which.max(lda$results$ROC)
+  roc_lda <- lda$results$ROC[lda_index]
+  sens_lda <- lda$results$Sens[lda_index]
+  spec_lda <- lda$results$Spec[lda_index]
+  
+  #LDA testing performance
   conf_lda <- confusionMatrix(lda_preds, testing$class)
+  pROC_lda <- roc(response = testing$class, predictor = lda_preds_prob$y)
+  auc_lda <- pROC_lda$auc
+  
+  return(auc_lda)
+
+}
+```
+
+
+```{r}
+gbm_model<-function(){
+  #GBM
+  gbm <- train(class~., data=data.frame(training), method="gbm", trControl=fitControl,metric=metric) 
+  gbm_preds_prob <- predict(gbm, newdata = data.frame(testing),type="prob") 
+  gbm_preds <- predict(gbm, newdata = data.frame(testing))
+  gbm_preds_prob <- predict(gbm, newdata = data.frame(testing), type = "prob")
+
+
+  #gbm training performance
+  gbm_index <- which.max(gbm$results$ROC)
+  roc_gbm <- gbm$results$ROC[gbm_index]
+  sens_gbm <- gbm$Sens[gbm_index]
+  spec_gbm <- gbm$results$Spec[gbm_index]
+  
+  #gbm testing performance
+  conf_gbm <- confusionMatrix(gbm_preds, testing$class)
+  pROC_gbm <- roc(response = testing$class, predictor = gbm_preds_prob$y)
+  auc_gbm <- pROC_gbm$auc
+  
+  return(auc_gbm)
+
+}
 ```
 
 ```{r}
-   #SVM
-    svm <- train(class~., data=training, method="svmRadial", trControl=fitControl,metric="ROC") 
-  svm_preds_prob <- predict(svm, newdata = testing,type="prob")
-  svm_preds <- predict(svm, newdata = testing)
-    
-  #SVM training performance
-  auc_tr_svm <- max(svm$results$ROC)
-  sens_tr_svm <- svm$results$Sens[which.max(svm$results$ROC)]
-  spec_tr_svm <- svm$results$Spec[which.max(svm$results$ROC)]
-  #SVM testing performance
-  conf_svm <- confusionMatrix(svm_preds, testing$class)
-```
 
-```{r}
-#Random Forest
-#rf <- train(class~.,data=data.frame(training), method="rf", trControl=fitControl, metric="ROC") 
-rf_preds_prob <- predict(rf, newdata = data.frame(training),type="prob") 
-rf_preds <- predict(rf, newdata = data.frame(training)) 
-```
-
-```{r}
-#GBM
-#gbm <- train(class~., data=data.frame(training), method="gbm", trControl=fitControl,metric="ROC") 
-gbm_preds_prob <- predict(gbm, newdata = data.frame(testing),type="prob") 
-gbm_preds <- predict(gbm, newdata = data.frame(testing)) 
-```
-
-```{r}
-#PAM
-pam <- train(class~., data=data.frame(training), method="pam", trControl=fitControl,metric="ROC")#plr
-
-pam_preds_prob <- predict( pam, newdata = data.frame(testing),type="prob") 
-pam_preds <- predict( pam, newdata = data.frame(testing)) 
-
-```
-```{r}
 #DL
+h2o.init(nthreads = -1)
+h2o.removeAll()
+# dl_1 <- h2o.deeplearning(x= x, y= y, model_id="dl_fit1", training_frame= as.h2o(training))
 
+activation_opt <- c("Rectifier", "Maxout", "Tanh")
+l1_opt <- as.double(c(0, 1e-4, 1e-5, 1e-6, 1e-7)) #L1 regularization
+l2_opt <- as.double(c(0, 1e-5, 1e-4, 1e-6, 1e-7)) #L2 regularization
+hyper_params <- list(activation = activation_opt, l1 = l1_opt, l2 = l2_opt, hidden=list(c(10,10),c(20,20),c(50,50),c(30,30,30),c(25,25,25,25)))
+
+dl_grid <- h2o.grid(algorithm="deeplearning", x= x, y= y, training_frame= as.h2o(training), stopping_rounds = 2, stopping_metric="misclassification", hyper_params = hyper_params, grid_id="dl_grid")
+
+grid <- h2o.getGrid("dl_grid",sort_by="mse",decreasing=FALSE) 
+dl <- h2o.getModel(grid@model_ids[[10]]) 
+
+dl_perf <- h2o.performance(model = dl, newdata = as.h2o(testing))
+imp_dl <- data.frame(h2o.varimp(dl))
+
+conf_dl <- h2o.confusionMatrix(dl)
+auc_dl <- h2o.auc(dl_perf, valid=TRUE)
+
+auc_dl
 ```
 
+```{r, predictor importance}
+imp_rf <- varImp(rf, scale = FALSE)$importance  %>% arrange(desc(Overall))
+imp_svm <- as.data.frame(sort(varImp(svm, scale = FALSE)$importance$y, decreasing = TRUE))
+row.names(imp_svm) <- rownames(varImp(svm, scale = FALSE)$importance %>%arrange(desc(y)))
+imp_tree <- varImp(tree, scale = FALSE)$importance %>% arrange(desc(Overall))
+imp_lda <- as.data.frame(sort(varImp(lda, scale = FALSE)$importance$y, decreasing=TRUE))
+row.names(imp_lda) <- rownames(varImp(lda, scale = FALSE)$importance%>%arrange(desc(y)))
+imp_gbm <- varImp(gbm, scale = FALSE)$importance %>% arrange(desc(Overall))
+imp_dl <- imp_dl[c('variable','relative_importance')] %>% arrange(desc(relative_importance))
 
+imp_rf$name <- rownames(imp_rf)
+imp_svm$name <- rownames(imp_svm)
+imp_tree$name <- rownames(imp_tree)
+imp_lda$name <- rownames(imp_lda)
+imp_gbm$name <- rownames(imp_gbm)
+colnames(imp_dl) <- c('name', 'value')
+
+importance <- merge(imp_rf, imp_svm, by = "name")
+importance <- merge(importance, imp_tree, by = "name")
+importance <- merge(importance, imp_lda, by = "name")
+importance <- merge(importance, imp_gbm, by = "name")
+importance <- merge(importance, imp_dl, by = "name")
+colnames(importance) <- c("name", "rf", "svm", "cart", "lda", "gbm", "dl")
+importance
+
+top20 <- data.frame(matrix(ncol = 12, nrow = 162))
+colnames(top20) <- c("rf_name", "rf_value", "svm_name", "svm_value", "cart_name", "cart_value", "lda_name", "lda_value", "gbm_name", "gbm_value", "dl_name", "dl_value")
+
+top20$rf_name <- imp_rf$name
+top20$rf_value <- imp_rf$Overall / sum(imp_rf$Overall)
+top20$svm_name <- imp_svm$name
+top20$svm_value <- imp_svm$`sort(varImp(svm, scale = FALSE)$importance$y, decreasing = TRUE)` / sum(imp_svm$`sort(varImp(svm, scale = FALSE)$importance$y, decreasing = TRUE)`)
+top20$cart_name <- imp_tree$name
+top20$cart_value <- imp_tree$Overall / sum(imp_tree$Overall)
+top20$lda_name <- imp_lda$name
+top20$lda_value <- imp_lda$`sort(varImp(lda, scale = FALSE)$importance$y, decreasing = TRUE)` / sum(imp_lda$`sort(varImp(lda, scale = FALSE)$importance$y, decreasing = TRUE)`)
+top20$gbm_name <- imp_gbm$name
+top20$gbm_value <- imp_gbm$Overall / sum(imp_gbm$Overall)
+top20$dl_name <- imp_dl$name
+top20$dl_value <- imp_dl$value / sum(imp_dl$value)
+
+top20
+
+#write.csv(importance,'metabolite_relevance.csv')
+#write.csv(top20,'metabolite_rankings.csv')
+```
+
+```{r, collect AUCs}
+k=10
+auc <- as.data.frame()
+
+fill_auc <- function(){
+  auc[1,1] <- rf_model()
+  auc[2,1] <- svm_model()
+  auc[3,1] <- cart_model()
+  auc[4,1] <- lda_model()
+  auc[5,1] <- gbm_model()
+  auc[6,1] <- dl_model()
+}
+
+#write.csv(auc,'AUC.csv')
+
+```
 
 
 

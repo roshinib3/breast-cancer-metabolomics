@@ -1,0 +1,98 @@
+---
+title: "Comparative Study of Machine Learning Algorithms for Estrogen Receptor Status Prediction On Breast Cancer Metabolomics Data - Predictor Importance Analysis"
+author: "Roshini Balasubramanian"
+output: 
+  html_document:
+    keep_md: true
+---
+```{r}
+library(tidygraph)
+library(janitor)
+library(igraph)
+library(ggplot2)
+library(ggpubr)
+
+edges <- data.frame(from=rep(as.character(NA), 120),to=rep(as.character(NA), 120),weight=rep(as.double(NA), 120), stringsAsFactors=F)
+
+rank <- read.csv('metabolite_rankings.csv')
+rank <- rank[1:20,]
+
+edges$from <- rep(c('rf','svm','cart','lda','gbm','dl'), each=20)
+edges$to[1:20] <-as.character(rank$rf_name[1:20])
+edges$to[21:40] <-as.character(rank$svm_name[1:20])
+edges$to[41:60] <-as.character(rank$cart_name[1:20])
+edges$to[61:80] <-as.character(rank$lda_name[1:20])
+edges$to[81:100] <-as.character(rank$gbm_name[1:20])
+edges$to[101:120] <-as.character(rank$dl_name[1:20])
+
+edges$weight[1:20] <-rank$rf_value[1:20]
+edges$weight[21:40] <-rank$svm_value[1:20]
+edges$weight[41:60] <-rank$cart_value[1:20]
+edges$weight[61:80] <-rank$lda_value[1:20]
+edges$weight[81:100] <-rank$gbm_value[1:20]
+edges$weight[101:120] <-rank$dl_value[1:20]
+
+g <- graph.data.frame(edges, directed = F)
+V(g)$type <- V(g)$name %in% edges[,1] 
+input <- get.incidence(g, attr = "weight")
+
+V(g)$color <- V(g)$type
+V(g)$color=gsub("FALSE","red",V(g)$color)
+V(g)$color=gsub("TRUE","green",V(g)$color)
+V(g)$shape=gsub("FALSE", "square",V(g)$shape)
+V(g)$shape=gsub("TRUE", "circle",V(g)$shape)
+deg <- degree(g, mode="all")
+#write.csv(deg, 'metabolite_degrees.csv')
+plot(g, edge.color="gray30", edge.width=E(g)$weight, vertex.label = NA, vertex.label.dist= 0.01, vertex.size=deg*2, label.cex = 0.0001, layout=layout_on_sphere)
+```
+
+```{r}
+omics_norm <- as.data.frame(read.csv('metabolomics_normalized.csv'), header = TRUE)
+colnames(omics_norm)[1] <- 'rowname'
+omics_norm <- data.frame(t(omics_norm))
+omics_norm <- omics_norm %>%
+  row_to_names(row_number = 1)
+omics_norm$'beta-alanine' <- as.numeric(as.character(omics_norm$'beta-alanine'))
+omics_norm$'xanthine' <- as.numeric(as.character(omics_norm$'xanthine'))
+omics_norm$'3-phosphoglycerate' <- as.numeric(as.character(omics_norm$'3-phosphoglycerate'))
+omics_norm$'uracil' <- as.numeric(as.character(omics_norm$'uracil'))
+
+omics_norm$class <- as.factor(omics_norm$class)
+levels(omics_norm$'class') <- c("ER-", "ER+", "status")
+
+
+p_ba <- ggplot(omics_norm, aes(x = class, y = `beta-alanine`, fill = class)) + 
+  geom_boxplot() +  scale_fill_brewer(palette="Dark2") + labs(title = "beta-alanine")
+p_xa <- ggplot(omics_norm, aes(x = class, y = xanthine, fill = class)) + 
+  geom_boxplot() +  scale_fill_brewer(palette="Dark2") + labs(title = "xanthine")
+p_3p <- ggplot(omics_norm, aes(x = class, y = `3-phosphoglycerate`, fill = class)) + 
+  geom_boxplot() +  scale_fill_brewer(palette="Dark2") + labs(title = "3-phosphoglycerate ")
+p_ur <- ggplot(omics_norm, aes(x = class, y = `uracil`, fill = class)) + 
+  geom_boxplot() +  scale_fill_brewer(palette="Dark2") + labs(title = "uracil ")
+
+ggarrange(p_ba +rremove("x.text")+rremove("ylab"), p_xa +rremove("x.text")+rremove("ylab"), p_3p +rremove("x.text")+rremove("ylab"), p_ur +rremove("x.text")+rremove("ylab"), ncol=2, nrow= 2, common.legend = TRUE, legend = 'right')
+
+```
+
+
+```{r}
+graph <- as_tbl_graph(
+  data.frame(
+    from = edges$from,
+    to = edges$to,
+    weight = edges$weight
+  )
+)
+graph
+
+graph %>% 
+  activate(nodes) %>%
+  #left_join(nodes, by = "name") %>%
+  mutate(degree = centrality_degree()) %>%
+  ggraph() + 
+  geom_edge_link() +
+  geom_node_point(aes(size = degree)) +
+  geom_node_text(aes(label = name,size = degree, color = c("#E69F00"))) #+
+  #scale_color_manual(values = c("#E69F00", "#56B4E9")) 
+```
+
