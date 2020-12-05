@@ -37,13 +37,18 @@ V(g)$type <- V(g)$name %in% edges[,1]
 input <- get.incidence(g, attr = "weight")
 
 V(g)$color <- V(g)$type
-V(g)$color=gsub("FALSE","red",V(g)$color)
-V(g)$color=gsub("TRUE","green",V(g)$color)
-V(g)$shape=gsub("FALSE", "square",V(g)$shape)
-V(g)$shape=gsub("TRUE", "circle",V(g)$shape)
+V(g)$color <- gsub("FALSE","red",V(g)$color)
+V(g)$color <- gsub("TRUE","lightblue",V(g)$color)
+V(g)$shape <- gsub("FALSE", "square",V(g)$shape)
+V(g)$shape <- gsub("TRUE", "circle",V(g)$shape)
 deg <- degree(g, mode="all")
+V(g)$label.cex <- deg*0.1
+
 #write.csv(deg, 'metabolite_degrees.csv')
-plot(g, edge.color="gray30", edge.width=E(g)$weight, vertex.label = NA, vertex.label.dist= 0.01, vertex.size=deg*2, label.cex = 0.0001, layout=layout_on_sphere)
+plot(g, edge.color="gray30", edge.width=E(g)$weight, vertex.label.dist= 0.01, vertex.size=deg*3, label.cex = 0.0001, layout=layout_with_dh(g))
+
+#further formatting in cytoscape
+write.graph(g, "predictor_importance.graphml", format = "graphml")
 ```
 
 ```{r}
@@ -84,15 +89,5 @@ graph <- as_tbl_graph(
   )
 )
 graph
-
-graph %>% 
-  activate(nodes) %>%
-  #left_join(nodes, by = "name") %>%
-  mutate(degree = centrality_degree()) %>%
-  ggraph() + 
-  geom_edge_link() +
-  geom_node_point(aes(size = degree)) +
-  geom_node_text(aes(label = name,size = degree, color = c("#E69F00"))) #+
-  #scale_color_manual(values = c("#E69F00", "#56B4E9")) 
 ```
 
