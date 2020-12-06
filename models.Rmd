@@ -62,7 +62,7 @@ colnames(df_t) <- colnames(omics[,-1])
 
 normalized_omics <- df_t
 normalized_omics <- rbind(normalized_omics,"class" = classifications)
-write.csv(normalized_omics, 'metabolomics_normalized.csv')
+#write.csv(normalized_omics, 'metabolomics_normalized.csv')
 ```
 
 ```{r, fig.height = 9}
@@ -269,6 +269,16 @@ auc_dl <- h2o.auc(dl_perf, valid=TRUE)
 
 auc_dl
 ```
+```{r}
+library(neuralnet)
+colnames(training)[146] <- 'beta.alanine'
+colnames(training)[32] <- 'glycolic.acid'
+NN <- neuralnet(class ~ beta.alanine + glycolic.acid + ribose + fructose, training, hidden = 3)
+
+plot(NN)
+```
+
+
 
 ```{r, predictor importance}
 imp_rf <- varImp(rf, scale = FALSE)$importance  %>% arrange(desc(Overall))
